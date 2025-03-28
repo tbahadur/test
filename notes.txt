@@ -1,0 +1,466 @@
+<assembly xmlns="http://maven.apache.org/plugins/maven-assembly-plugin/assembly/1.1.3" 
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+          xsi:schemaLocation="http://maven.apache.org/plugins/maven-assembly-plugin/assembly/1.1.3 
+          http://maven.apache.org/xsd/assembly-1.1.3.xsd">
+    
+    <id>distribution</id>
+    <formats>
+        <format>zip</format>
+    </formats>
+
+    <includeBaseDirectory>true</includeBaseDirectory>
+
+    <fileSets>
+        <!-- Include compiled JAR -->
+        <fileSet>
+            <directory>${project.build.directory}</directory>
+            <includes>
+                <include>${project.build.finalName}.jar</include>
+            </includes>
+            <outputDirectory>/</outputDirectory>
+        </fileSet>
+
+        <!-- Include configuration files -->
+        <fileSet>
+            <directory>src/main/resources</directory>
+            <outputDirectory>config</outputDirectory>
+        </fileSet>
+
+        <!-- Include scripts if any -->
+        <fileSet>
+            <directory>scripts</directory>
+            <outputDirectory>bin</outputDirectory>
+            <fileMode>0755</fileMode>
+        </fileSet>
+    </fileSets>
+</assembly>
+
+
+
+      <project xmlns="http://maven.apache.org/POM/4.0.0" 
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example.fixengine</groupId>
+    <artifactId>multileg-matching-engine</artifactId>
+    <version>1.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <name>Multileg Matching Engine</name>
+    <description>A FIX-based multileg order matching engine with QuickFIX/J</description>
+
+    <properties>
+        <maven.compiler.source>11</maven.compiler.source>
+        <maven.compiler.target>11</maven.compiler.target>
+    </properties>
+
+    <dependencies>
+        <!-- QuickFIX/J Library -->
+        <dependency>
+            <groupId>org.quickfixj</groupId>
+            <artifactId>quickfixj-core</artifactId>
+            <version>2.3.1</version>
+        </dependency>
+        <dependency>
+            <groupId>org.quickfixj</groupId>
+            <artifactId>quickfixj-msg-fix44</artifactId>
+            <version>2.3.1</version>
+        </dependency>
+
+        <!-- SLF4J for logging -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>1.7.30</version>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-simple</artifactId>
+            <version>1.7.30</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.8.1</version>
+                <configuration>
+                    <source>11</source>
+                    <target>11</target>
+                </configuration>
+            </plugin>
+            
+            <!-- Maven Assembly Plugin to package as ZIP -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-assembly-plugin</artifactId>
+                <version>3.3.0</version>
+                <configuration>
+                    <descriptors>
+                        <descriptor>src/main/assembly/zip.xml</descriptor>
+                    </descriptors>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>make-assembly</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>single</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+
+
+
+
+           multileg-matching-engine
+│── src
+│   ├── main
+│   │   ├── java
+│   │   │   ├── com/example/fixengine
+│   │   │   │   ├── FIXServerApplication.java
+│   │   │   │   ├── MatchingEngine.java
+│   │   │   │   ├── OrderBook.java
+│   │   │   │   ├── MultilegOrder.java
+│   │   │   │   ├── OrderLeg.java
+│   ├── test
+│   │   ├── java (for unit tests)
+│── pom.xml
+
+
+
+           mvn archetype:generate -DgroupId=com.example.fixengine -DartifactId=multileg-matching-engine -DarchetypeArtifactId=maven-archetype-quickstart -DinteractiveMode=false
+
+
+           class OrderBook {
+    List<MultilegOrder> orders = new ArrayList<>();
+
+    public void addOrder(MultilegOrder order) {
+        orders.add(order);
+        System.out.println("Added order: " + order);
+    }
+
+    public Optional<MultilegOrder> findMatchingOrder(MultilegOrder incomingOrder) {
+        for (MultilegOrder existingOrder : orders) {
+            if (isMatching(existingOrder, incomingOrder)) {
+                return Optional.of(existingOrder);
+            }
+        }
+        return Optional.empty();
+    }
+
+    private boolean isMatching(MultilegOrder order1, MultilegOrder order2) {
+        if (order1.legs.size() != order2.legs.size()) return false;
+
+        for (int i = 0; i < order1.legs.size(); i++) {
+            OrderLeg leg1 = order1.legs.get(i);
+            OrderLeg leg2 = order2.legs.get(i);
+
+            boolean isOpposite = leg1.symbol.equals(leg2.symbol) &&
+                                 leg1.quantity == leg2.quantity &&
+                                 !leg1.side.equals(leg2.side) &&
+                                 leg1.price == leg2.price;
+
+            if (!isOpposite) return false;
+        }
+        return true;
+    }
+
+    public void removeOrder(MultilegOrder order) {
+        orders.remove(order);
+        System.out.println("Removed order: " + order);
+    }
+}
+
+
+
+class MatchingEngine {
+    OrderBook orderBook = new OrderBook();
+
+    public void processOrder(MultilegOrder order) {
+        Optional<MultilegOrder> match = orderBook.findMatchingOrder(order);
+        if (match.isPresent()) {
+            System.out.println("Order Matched: " + order + " <-> " + match.get());
+            orderBook.removeOrder(match.get());
+        } else {
+            orderBook.addOrder(order);
+        }
+    }
+
+    public boolean cancelOrder(String orderId) {
+        Optional<MultilegOrder> orderToRemove = orderBook.orders.stream()
+                .filter(order -> order.orderId.equals(orderId))
+                .findFirst();
+
+        if (orderToRemove.isPresent()) {
+            orderBook.removeOrder(orderToRemove.get());
+            System.out.println("Order Canceled: " + orderId);
+            return true;
+        }
+        return false;
+    }
+}
+
+
+import quickfix.*;
+import quickfix.field.*;
+import quickfix.fix44.*;
+
+import java.util.*;
+
+public class FIXServerApplication extends MessageCracker implements Application {
+    private final MatchingEngine matchingEngine;
+
+    public FIXServerApplication() {
+        this.matchingEngine = new MatchingEngine();
+    }
+
+    @Override
+    public void onCreate(SessionID sessionId) {}
+    
+    @Override
+    public void onLogon(SessionID sessionId) {
+        System.out.println("Client logged in: " + sessionId);
+    }
+
+    @Override
+    public void onLogout(SessionID sessionId) {
+        System.out.println("Client logged out: " + sessionId);
+    }
+
+    @Override
+    public void toAdmin(Message message, SessionID sessionId) {}
+
+    @Override
+    public void fromAdmin(Message message, SessionID sessionId) throws FieldNotFound, IncorrectDataFormat, IncorrectTagValue, RejectLogon {}
+
+    @Override
+    public void toApp(Message message, SessionID sessionId) throws DoNotSend {}
+
+    @Override
+    public void fromApp(Message message, SessionID sessionId) throws FieldNotFound, IncorrectDataFormat, IncorrectTagValue, UnsupportedMessageType {
+        crack(message, sessionId);
+    }
+
+    @MessageCracker.Handler
+    public void onMessage(NewOrderMultileg order, SessionID sessionId) throws FieldNotFound {
+        String orderId = order.get(new ClOrdID()).getValue();
+        String trader = sessionId.toString();
+
+        // Extract order legs
+        List<OrderLeg> legs = new ArrayList<>();
+        for (int i = 1; i <= order.getNoLegs().getValue(); i++) {
+            NewOrderMultileg.NoLegs group = new NewOrderMultileg.NoLegs();
+            order.getGroup(i, group);
+            
+            String symbol = group.get(new LegSymbol()).getValue();
+            int quantity = group.get(new LegOrderQty()).getValue();
+            double price = group.get(new LegPrice()).getValue();
+            String side = (group.get(new LegSide()).getValue() == Side.BUY) ? "BUY" : "SELL";
+
+            legs.add(new OrderLeg(symbol, quantity, price, side));
+        }
+
+        MultilegOrder multilegOrder = new MultilegOrder(orderId, trader, legs);
+        matchingEngine.processOrder(multilegOrder);
+
+        // Send execution report if matched
+        Optional<MultilegOrder> match = matchingEngine.orderBook.findMatchingOrder(multilegOrder);
+        if (match.isPresent()) {
+            sendExecutionReport(orderId, sessionId, ExecType.FILL, "Order Filled");
+        }
+    }
+
+    @MessageCracker.Handler
+    public void onMessage(OrderCancelRequest cancelRequest, SessionID sessionId) throws FieldNotFound {
+        String orderId = cancelRequest.get(new OrigClOrdID()).getValue();
+
+        boolean removed = matchingEngine.cancelOrder(orderId);
+        if (removed) {
+            sendExecutionReport(orderId, sessionId, ExecType.CANCELED, "Order Canceled");
+        } else {
+            System.out.println("Cancel request failed: Order " + orderId + " not found.");
+        }
+    }
+
+    private void sendExecutionReport(String orderId, SessionID sessionId, char execType, String statusMessage) {
+        try {
+            ExecutionReport executionReport = new ExecutionReport(
+                new OrderID(orderId),
+                new ExecID(UUID.randomUUID().toString()),
+                new ExecType(execType),
+                new OrdStatus(execType),
+                new Side(Side.BUY),
+                new LeavesQty(0),
+                new CumQty(0),
+                new AvgPx(0.0)
+            );
+
+            Session.sendToTarget(executionReport, sessionId);
+            System.out.println("Sent Execution Report: " + statusMessage + " for Order: " + orderId);
+        } catch (SessionNotFound e) {
+            e.printStackTrace();
+        }
+    }
+}
+
+
+
+import java.util.*;
+
+class OrderLeg {
+    String symbol;
+    int quantity;
+    double price;
+    String side; // "BUY" or "SELL"
+
+    public OrderLeg(String symbol, int quantity, double price, String side) {
+        this.symbol = symbol;
+        this.quantity = quantity;
+        this.price = price;
+        this.side = side;
+    }
+
+    @Override
+    public String toString() {
+        return side + " " + quantity + " " + symbol + " @ " + price;
+    }
+}
+
+class MultilegOrder {
+    String orderId;
+    List<OrderLeg> legs;
+    String trader;
+
+    public MultilegOrder(String orderId, String trader, List<OrderLeg> legs) {
+        this.orderId = orderId;
+        this.trader = trader;
+        this.legs = legs;
+    }
+
+    @Override
+    public String toString() {
+        return "OrderID: " + orderId + ", Trader: " + trader + ", Legs: " + legs;
+    }
+}
+
+class OrderBook {
+    List<MultilegOrder> orders = new ArrayList<>();
+
+    public void addOrder(MultilegOrder order) {
+        orders.add(order);
+        System.out.println("Added order: " + order);
+    }
+
+    public Optional<MultilegOrder> findMatchingOrder(MultilegOrder incomingOrder) {
+        for (MultilegOrder existingOrder : orders) {
+            if (isMatching(existingOrder, incomingOrder)) {
+                return Optional.of(existingOrder);
+            }
+        }
+        return Optional.empty();
+    }
+
+    private boolean isMatching(MultilegOrder order1, MultilegOrder order2) {
+        if (order1.legs.size() != order2.legs.size()) return false;
+
+        for (int i = 0; i < order1.legs.size(); i++) {
+            OrderLeg leg1 = order1.legs.get(i);
+            OrderLeg leg2 = order2.legs.get(i);
+
+            boolean isOpposite = leg1.symbol.equals(leg2.symbol) &&
+                                 leg1.quantity == leg2.quantity &&
+                                 !leg1.side.equals(leg2.side) &&
+                                 leg1.price == leg2.price;
+
+            if (!isOpposite) return false;
+        }
+        return true;
+    }
+
+    public void removeOrder(MultilegOrder order) {
+        orders.remove(order);
+        System.out.println("Removed order: " + order);
+    }
+}
+
+class MatchingEngine {
+    OrderBook orderBook = new OrderBook();
+
+    public void processOrder(MultilegOrder order) {
+        Optional<MultilegOrder> match = orderBook.findMatchingOrder(order);
+        if (match.isPresent()) {
+            System.out.println("Order Matched: " + order + " <-> " + match.get());
+            orderBook.removeOrder(match.get());
+        } else {
+            orderBook.addOrder(order);
+        }
+    }
+}
+
+public class MultiLegMatching {
+    public static void main(String[] args) {
+        MatchingEngine engine = new MatchingEngine();
+
+        // Creating orders
+        MultilegOrder order1 = new MultilegOrder("O1", "TraderA", Arrays.asList(
+            new OrderLeg("AAPL 150C", 10, 5.0, "BUY"),
+            new OrderLeg("AAPL 155C", 10, 3.0, "SELL")
+        ));
+
+        MultilegOrder order2 = new MultilegOrder("O2", "TraderB", Arrays.asList(
+            new OrderLeg("AAPL 150C", 10, 5.0, "SELL"),
+            new OrderLeg("AAPL 155C", 10, 3.0, "BUY")
+        ));
+
+        // Process orders
+        engine.processOrder(order1);
+        engine.processOrder(order2);
+    }
+}
+
+quickfix.cfg
+
+[DEFAULT]
+ConnectionType=acceptor
+StartTime=00:00:00
+EndTime=23:59:59
+HeartBtInt=30
+FileStorePath=store
+FileLogPath=log
+UseDataDictionary=Y
+DataDictionary=FIX44.xml
+
+[SESSION]
+BeginString=FIX.4.4
+SenderCompID=MATCHING_ENGINE
+TargetCompID=CLIENT
+
+
+
+  import quickfix.*;
+
+public class FIXServer {
+    public static void main(String[] args) throws ConfigError {
+        SessionSettings settings = new SessionSettings("quickfix.cfg");
+        Application application = new FIXServerApplication();
+        FileStoreFactory storeFactory = new FileStoreFactory(settings);
+        FileLogFactory logFactory = new FileLogFactory(settings);
+        MessageFactory messageFactory = new DefaultMessageFactory();
+        Acceptor acceptor = new SocketAcceptor(application, storeFactory, settings, logFactory, messageFactory);
+
+        acceptor.start();
+        System.out.println("FIX Server Started...");
+    }
+}
+
+
+
+  
