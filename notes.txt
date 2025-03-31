@@ -1,3 +1,66 @@
+
+    <!-- SLF4J API -->
+    <dependency>
+        <groupId>org.slf4j</groupId>
+        <artifactId>slf4j-api</artifactId>
+        <version>1.7.30</version>
+    </dependency>
+
+    <!-- SLF4J Simple Logger (or use logback-classic for more advanced logging) -->
+    <dependency>
+        <groupId>org.slf4j</groupId>
+        <artifactId>slf4j-simple</artifactId>
+        <version>1.7.30</version>
+    </dependency>
+
+
+
+logger,properties
+# SLF4J Simple Logger Configuration
+
+# Log level (ERROR, WARN, INFO, DEBUG, TRACE)
+org.slf4j.simpleLogger.defaultLogLevel=INFO
+
+# Print logs to stdout
+org.slf4j.simpleLogger.logFile=System.out
+
+# Show timestamp in logs
+org.slf4j.simpleLogger.showDateTime=true
+
+# Define date-time format (optional)
+org.slf4j.simpleLogger.dateTimeFormat=yyyy-MM-dd HH:mm:ss
+
+# Show log level in output
+org.slf4j.simpleLogger.showLogName=true
+
+# Show the fully qualified class name (optional)
+org.slf4j.simpleLogger.showShortLogName=true
+
+
+
+public class FIXServerApplication implements Application {
+    private static final Logger logger = LoggerFactory.getLogger(FIXServerApplication.class);
+    private static final String SETTINGS_FILE = "path/to/quickfix.cfg";
+
+    public void start() {
+        try {
+            logger.info("Starting QuickFIX/J Acceptor...");
+            SessionSettings settings = new SessionSettings(SETTINGS_FILE);
+            MessageStoreFactory storeFactory = new FileStoreFactory(settings);
+            LogFactory logFactory = new FileLogFactory(settings);
+            MessageFactory messageFactory = new DefaultMessageFactory();
+            Application application = new FIXServerApplication();
+
+            Acceptor acceptor = new SocketAcceptor(application, storeFactory, settings, logFactory, messageFactory);
+            acceptor.start();
+
+            logger.info("QuickFIX/J Acceptor started successfully.");
+        } catch (Exception e) {
+            logger.error("Error starting QuickFIX/J Acceptor", e);
+        }
+    }
+
+
 #!/bin/bash
 
 # Define the directory where the app is unzipped
