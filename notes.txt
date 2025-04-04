@@ -1,4 +1,182 @@
 
+import quickfix.*;
+import quickfix.field.*;
+import quickfix.fix44.NewOrderSingle;
+
+public class FixMessageParser {
+    public static void main(String[] args) {
+        // Example FIX String (New Order Single - 35=D)
+        String fixString = "8=FIX.4.4|9=112|35=D|49=CLIENT1|56=BROKER|11=123456|55=AAPL|54=1|38=100|40=2|44=150.00|10=128|";
+        fixString = fixString.replace("|", "\u0001"); // Convert to valid FIX format
+        
+        try {
+            // Create a Data Dictionary (optional but recommended)
+            DataDictionary dataDictionary = new DataDictionary("FIX44.xml");
+
+            // Parse the FIX string into a QuickFIX/J Message object
+            Message fixMessage = MessageUtils.parse(new DefaultMessageFactory(), dataDictionary, fixString);
+
+            // Ensure it's a New Order Single (35=D)
+            if (fixMessage instanceof NewOrderSingle) {
+                NewOrderSingle order = (NewOrderSingle) fixMessage;
+
+                // Extract fields
+                String clOrdID = order.getString(ClOrdID.FIELD);  // Client Order ID
+                String symbol = order.getString(Symbol.FIELD);    // Symbol (e.g., AAPL)
+                char side = order.getChar(Side.FIELD);           // Buy (1) / Sell (2)
+                double quantity = order.getDouble(OrderQty.FIELD); // Order Quantity
+                double price = order.getDouble(Price.FIELD);    // Price (if limit order)
+
+                // Print extracted values
+                System.out.println("Parsed Order:");
+                System.out.println("ClOrdID: " + clOrdID);
+                System.out.println("Symbol: " + symbol);
+                System.out.println("Side: " + (side == '1' ? "BUY" : "SELL"));
+                System.out.println("Quantity: " + quantity);
+                System.out.println("Price: " + price);
+            } else {
+                System.out.println("Invalid or Unsupported FIX message type.");
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+}
+
+
+initiator.cfg
+[DEFAULT]
+ReconnectInterval=5
+FileStorePath=store
+FileLogPath=logs
+StartTime=00:00:00
+EndTime=23:59:59
+HeartBtInt=30
+UseDataDictionary=Y
+DataDictionary=FIX44.xml
+
+[SESSION]
+BeginString=FIX.4.4
+SenderCompID=TRADER1
+TargetCompID=FIXSERVER
+SocketConnectHost=127.0.0.1  # Replace with your FIX server IP
+SocketConnectPort=5001       # Replace with your FIX server port
+SessionQualifier=ORDER_SESSION
+
+
+import quickfix.*;
+import quickfix.field.*;
+import quickfix.fix44.ExecutionReport;
+import quickfix.fix44.NewOrderSingle;
+
+import java.util.UUID;
+
+public class FixClientApp extends MessageCracker implements Application {
+    private SessionID sessionID;
+
+    @Override
+    public void onCreate(SessionID sessionId) {
+        System.out.println("[FIX] Session Created: " + sessionId);
+    }
+
+    @Override
+    public void onLogon(SessionID sessionId) {
+        this.sessionID = sessionId;
+        System.out.println("[FIX] Logged in to FIX server!");
+        sendNewOrder();
+    }
+
+    @Override
+    public void onLogout(SessionID sessionId) {
+        System.out.println("[FIX] Logged out.");
+    }
+
+    @Override
+    public void toAdmin(Message message, SessionID sessionId) {
+        System.out.println("[ADMIN OUT] " + message);
+    }
+
+    @Override
+    public void fromAdmin(Message message, SessionID sessionId) {
+        System.out.println("[ADMIN IN] " + message);
+    }
+
+    @Override
+    public void toApp(Message message, SessionID sessionId) throws DoNotSend {
+        System.out.println("[APP OUT] " + message);
+    }
+
+    @Override
+    public void fromApp(Message message, SessionID sessionId) throws FieldNotFound, UnsupportedMessageType, IncorrectTagValue {
+        System.out.println("[APP IN] " + message);
+        crack(message);  // Process messages using MessageCracker
+    }
+
+    // Send a New Order Single (35=D)
+    public void sendNewOrder() {
+        try {
+            NewOrderSingle newOrder = new NewOrderSingle(
+                    new ClOrdID(UUID.randomUUID().toString()), // Unique Client Order ID
+                    new Side(Side.BUY),                        // Buy Order
+                    new TransactTime(),                        // Current Timestamp
+                    new OrdType(OrdType.LIMIT)                 // Limit Order
+            );
+
+            newOrder.set(new Symbol("AAPL"));      // Stock Symbol
+            newOrder.set(new OrderQty(100));       // Order Quantity
+            newOrder.set(new Price(150.00));       // Limit Price
+            newOrder.set(new TimeInForce(TimeInForce.DAY)); // Order valid for the day
+
+            Session.sendToTarget(newOrder, sessionID);
+            System.out.println("[FIX] New Order Sent: " + newOrder);
+        } catch (SessionNotFound e) {
+            e.printStackTrace();
+        }
+    }
+
+    // Handle Execution Report (35=8)
+    @Handler
+    public void onExecutionReport(ExecutionReport report, SessionID sessionId) throws FieldNotFound {
+        String orderId = report.getString(OrderID.FIELD);
+        String execType = report.getString(ExecType.FIELD);
+        String status = report.getString(OrdStatus.FIELD);
+        String symbol = report.getString(Symbol.FIELD);
+        double price = report.getDouble(Price.FIELD);
+        double quantity = report.getDouble(OrderQty.FIELD);
+
+        System.out.println("[EXECUTION REPORT] OrderID: " + orderId + 
+                ", ExecType: " + execType + 
+                ", Status: " + status + 
+                ", Symbol: " + symbol + 
+                ", Price: " + price + 
+                ", Quantity: " + quantity);
+    }
+
+    public static void main(String[] args) {
+        try {
+            SessionSettings settings = new SessionSettings("initiator.cfg");
+            FixClientApp app = new FixClientApp();
+            FileStoreFactory storeFactory = new FileStoreFactory(settings);
+            FileLogFactory logFactory = new FileLogFactory(settings);
+            MessageFactory messageFactory = new DefaultMessageFactory();
+            SocketInitiator initiator = new SocketInitiator(app, storeFactory, settings, logFactory, messageFactory);
+
+            initiator.start();
+            System.out.println("[FIX] Client started. Waiting for server response...");
+            
+            // Keep running
+            Thread.sleep(60000); // Keep the program running for 60 seconds
+            
+            initiator.stop();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+}
+
+
+
+
     <!-- SLF4J API -->
     <dependency>
         <groupId>org.slf4j</groupId>
