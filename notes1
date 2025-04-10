@@ -1,0 +1,792 @@
+
+0:45
+all right hello everybody can you hear me um so i'm alex i'm from hsbc and wow
+0:52
+this is a big stage um but i'm delighted to be here i moved to krakow this
+0:58
+beautiful city two years ago now loving it and really a big honor to be here today
+1:05
+speaking at devoxx poland so what am i here to talk about i want to talk about
+1:11
+basically a re-engineering that we're doing of part of our equities technology stack and why we're doing that
+1:18
+essentially it's the part that deals with or so buy and sell orders messages
+1:24
+the the throughput of that and the order message state i'll talk about briefly our business
+1:30
+requirements then talk about what our existing design is and some of the
+1:36
+limitations that we have and then i'll go into the different technology choices that we've
+1:41
+decided on to basically improve scalability lower latency
+1:47
+and better resiliency so what is equities electronic trading in hsbc um
+1:55
+basically whenever you buy or sell an order share equity financial
+2:00
+instrument on on an exchange electronically that can either be done as direct market access when you're
+2:06
+suddenly sending the order directly to the market or it can be increasingly now done by an
+2:12
+algorithm which is generating these orders which are being sent to the market our
+2:18
+clients are global that use our equities electronic trading
+2:24
+capability they love the use of our execution algos which allow them to place very large
+2:30
+orders that are then broken up into lots of little orders with different behaviors based on time
+2:35
+or based on volume on the on the exchange or based on liquidity seeking
+2:41
+we also have our internal traders that sit on trading floors on our big hub locations like new york
+2:47
+london hong kong dubai who use these algos as well
+2:54
+we've been on a journey in equities technology side for a number of years now where we've migrated a lot of our
+3:00
+technology from more vendor or legacy based apps to in-house applications we do that where
+3:07
+it makes sense um business stands for both scaling our order throughput and
+3:13
+being able to do more orders simply in more exchanges also to be able to support strategic
+Technology Teams
+3:18
+budget functionality and be more flexible in terms of the technology teams that
+3:23
+are actually supporting this in-house equities technology development we've got people around the world but the
+3:30
+stuff that i'm touching on today in particular is being built out of teams based in new york london and poland
+3:38
+so let me talk now about some of the limitations of our current design and
+Current Design
+3:45
+why we're looking to to do something different so
+3:50
+basically what we're talking about is that the processes and applications that deal with order messaging
+3:57
+and all the surface that services that need to consume that and
+4:02
+what we have is let's call it the the order management system oms
+4:08
+it's written in disruptor pattern which at the time was a really cutting edge and it's really designed for high
+4:15
+throughput low latency asynchronous event processing
+4:23
+it's it's it's great because you have at any given point data owned only by one thread for write access which
+4:30
+ensures that it's much much faster you don't get contention
+4:35
+the so the oms takes in orders executions cancel events coming in um it puts it on
+4:41
+a disruptor so this is actually a concurrent ring buffer
+4:46
+and we then deserialize that that object we journal that order to hard disk
+4:53
+we do event replication then we have some business processing logic that then typically will then decide where the
+4:59
+order needs to be routed to puts in an outbound disruptor another ring buffer and then that can get
+5:05
+consumed by um all of the other services in our system so that's typically our multiple
+5:12
+algo processes that are themselves generating a lot more orders that are then put back
+5:17
+onto the input disrupter here obviously we've got services which are actually market connectivity so two
+5:24
+different exchanges to actually trade and send back ax and fills we also have processes that deal with
+5:31
+data capture we use kdb for best execution analysis very important highly regulated industry
+5:38
+and then we've of course got view servers as well for pushing data to the ui
+5:43
+so we talked about about the event replication currently our primary oms has all of the
+Event Replication
+5:51
+order through order flow going through it so um if something happens during the day and
+5:57
+it falls over we need to have you know warm backups with all of that state ready and and good to go and take
+6:03
+leadership and continue so actually to be super safe we've got three backup omss here and
+6:11
+it's you know it's necessary but it's not necessarily um terribly effective like efficient because you've
+6:17
+got one oms that's actually doing work and the others are just backups so
+6:23
+um furthermore so i talked about the falling over of the main primary oms what about all of the services that are
+6:30
+consuming all of this order event data that's being pushed around currently the way that works is if say
+6:36
+one of our algo processes goes down it needs to go to the oms to say okay give
+6:41
+me the state of the world rehydrate me what's the current state and that takes time the oms is currently written in a very
+6:48
+single threaded manner it's super fast but it means that potentially imagine you have half a
+6:54
+million market orders and you've got 10 000 corridors and you've got loads of executions
+7:00
+potentially that event to rehydrate state for a process could impact the
+7:05
+order flow going through that primary oms which is obviously not ideal
+7:10
+um so yeah i talked about how the oms has essentially become now the golden source for order state
+7:17
+which you know it doesn't need to be it's doing too much um we've got processes failover that could
+7:23
+potentially slow down order flow which is an obvious concern if we're trying to scale
+7:28
+further another thing we have by design is multiple algo processes speaking to
+7:34
+that one primary oms which leads to natural bottleneck
+7:39
+there so there's some concerns by our business about how do we will we be able to scale further with his design
+7:45
+and then finally it's not particularly fast so at the time when we wrote this you know in-house oms it was we were
+7:51
+happy with it it was it was much faster than we had before um but
+7:56
+there's necessarily been a bit of code bloat over the years and there's a bit too much dc and we can do better
+8:02
+basically so we're looking to to improve that it's kind of around the millis low milliseconds currently
+Technology Choices
+8:09
+for some of that key processing so um we want a new design
+8:15
+and new technology we're gonna use new technology choices so that we can scale so that we can have
+8:23
+lower latency and and better resilience so how are we going to do that um
+8:29
+so first of all programming language we're going to choose java um this is a java conference i thought it'd be a good
+8:35
+opportunity no just kidding so um before we were actually using scala
+8:41
+which may be surprising to some at the time scala was actually quite advanced um we
+8:46
+weren't too sure which java was going it had cool things like lam does and a few things
+8:52
+but over the past few years as as you all know there's been a lot of improvements to the jabba libraries um
+8:58
+and that the reason to choose scala is no longer so obvious plus it's harder to find scala developers
+9:04
+yeah the obvious question why aren't we using c plus so
+9:10
+there's actually a really good video on this by daniel shaia i recommend you to watch on on youtube
+9:15
+where he basically argues yes you can write a faster low latency
+9:21
+applications using c plus over java but not significantly so and it comes at
+9:27
+a cost so in particular the cost of your you know your super right c plus developers that can write that kind of
+9:33
+code and if you want to be really fast then actually consider using think technology
+9:39
+like fpga so field programmable light arrays where you have you can directly programmed onto microcontrollers your
+9:46
+specific application logic um or use asics application specific um
+9:52
+integrated circuits where actually at production stage you build in the logic for your application so that
+9:58
+then enables you to go super fast down to the nanos you have specialized hedge funds that are into
+10:05
+the high frequency trading business we're not yet ambitious enough to compete in that space um maybe one day
+10:12
+so java for the rest of the presentation now i'm going to go through the different
+10:19
+technology choices we've made so to increase throughput and scalability how we've chosen a new design using an
+10:25
+eventbus man bus pattern with sharding
+10:30
+for performance i'll talk a bit on the sb binary protocol and some of the gc3
+10:36
+techniques that we use for lower latency one of the important things is how do you measure that
+10:42
+latency um so a bit more on the techniques there and and the hardware that we're using software
+10:48
+we're using um a bit also on the network accelerator that we're using called solar flare
+10:54
+and i'll finish with some discussion on the fast message transport
+11:00
+where we've chosen aeron which is a open source library so
+Sequencing Process
+11:06
+new design our sequencer process here is basically
+11:12
+a much cut down version of what our original oms process was
+11:17
+the idea is that all it does is listen to events on a command bus
+11:23
+sequence them so assign them global ids journal them on a separate thread
+11:29
+replicate that on a separate thread and do a minimum amount of business logic and send that back out on the
+11:36
+event bus thread which you'll see next slide the point here is any uh server's
+11:42
+component that wants to speak to the sequencer has to put events onto the command bus
+11:49
+and only the sequencer reads events off of the command bus
+11:54
+what's important about the the sequencing is that and why that has to be single threaded is you have
+12:01
+uh for example a client two clients want to buy hsbc shares and they send the
+12:06
+orders about the same time we need to guarantee that the order in which we receive those buy orders
+12:13
+is the order in which we process those orders on the exchange so we must have um the sequencing and global ids in that
+12:21
+sense to guarantee that there's no out of order processing so
+Event Bus
+12:26
+replication to secondary sequencers the events are then
+12:32
+put onto the event bus to be consumed the the buses multicast and all of the
+12:38
+services listening on the vampus can then listen to what's relevant to them
+Replay Server
+12:46
+so what's what's really key and new but about this design is our at the replay server that we've added here
+12:52
+so remember how previously if one of our services goes down and needs to rehydrate the state of the world it had
+12:58
+to go to our primary oms not efficient right we now have something called replay server which
+13:05
+can talk to the process that has you know stopped and is restarting
+13:10
+and as it restarts that replay server can send all of the the state that it needs to get up to the
+13:17
+point where we are and then it's um it's that's done out of band so no impact whatsoever to the the sequencer process
+13:24
+which continue to continue doing its thing um and it's smart enough that once you
+13:29
+the the process that's restarted has gotten up to the latest event it can then cut over to the live stream um and
+13:36
+listen to the event bus again so stuff coming from the sequencer so that's that's one of the big changes
+13:43
+we've got then just to to complicate the diagram further i've added a few few more boxes
+13:48
+the fixed proxy on the top left there is is one of the
+13:54
+things that we're rewriting to be super fast and is dedicated to listen to incoming fixed messages so trade
+14:00
+messages tcpip and then to to translate those and put them onto the command bus for the for
+14:06
+the sequencer um mentioned algo processes we have a lot of those that are you know generating
+14:13
+orders so there's lots of those that are sitting on this event bus as well
+Scaling Up
+14:22
+so what's great about this new design is that it gives us a number of opportunities for
+14:28
+scaling this up we could have multiple services on the same event in command bus
+14:33
+or we could have multiple event buses same or different sequencers um
+14:38
+i've given one one possibility here which we're looking at doing is you can have one
+14:45
+fixed process process so this is listening to client orders coming in so here we've got two orders one for
+14:51
+buying buddha selling budamex and buying plastic but currently are well-known polish stocks um what we'll do is we'll
+14:59
+start the symbols by letter so everything starting by a to n can go to one instance um everything's starting by
+15:06
+o to z or the other so hence who the mex goes left class block goes right
+15:11
+and we can scale that horizontally quite as quite easily so we could have you know multiple of these and just split by
+15:18
+instrument the importance of splitting by instrument is that if we do that we're guaranteeing again that orders are not
+15:24
+done out of process so all bluemax will go left
+Binary Protocol
+15:31
+so we've talked about how the design new design will help us with our our
+15:37
+trying to achieve now i want to talk a bit about the binary protocol so all the serialization
+15:42
+and digitalization of objects and out of memory that the moving of messages around
+15:47
+is quite important so if we're looking for microsecond handful microsecond level
+15:53
+events through our through sequencer for example we need to make sure that the binary protocol we use is not adding
+15:59
+unnecessary even nanoseconds to that we evaluated a few
+16:05
+different choices so in particular sbe so simple binary encoding which ultimately chose also chronicle wire we
+16:12
+also evaluated what it would involve to write our own custom binary protocol
+16:17
+in the end we decided not to write our own because if you do that then your developers have to learn and understand your own custom
+16:23
+protocol which only uses hsbc so it's not not great also you don't get so
+16:29
+um speaking to external teams becomes a lot more complicated as well case in point um we're using
+16:35
+velocimetrics for performance monitoring out of the box velocimetrics gives you standard um
+16:43
+binary decoders for protobuf sbe and chronicler so that was
+16:49
+that made sense uh to to use one of the standard ones
+16:55
+um if you want to be fast you want good performance you need to have sympathy
+17:01
+for your hardware task subsystems so you want to make sure that you're working on data that's co-located in memory and
+17:08
+that you then walk around your your memory in a
+17:13
+predictable fashion sbe one of the key design principles is
+17:20
+that it actively encourages and tries to enforce as much as possible using streaming access to data
+17:26
+so directly encode data into buffers
+17:32
+uh in um like ascending progression and then equally it strongly advises you
+17:38
+that you're decoding that you also write that into you read the data off the buffer in streaming sequential manner
+17:46
+it uses a flyweight pattern so that's where an object to to minimize memory usage
+17:53
+will do sharing of similar data of of data amongst similar objects and it's
+18:00
+quite powerful so other key design principles of sbe are copy free so you're not doing any
+18:07
+intermediate encoding decoding you've got
+18:12
+allocation free so it tries not to at any any time create extra objects or allocation of memory
+18:19
+and it uses native type a lot so faster memory access
+18:24
+so all of this leads to predictable and minimal variance in performance um in
+18:30
+your latency which is great so those were that was a good reason to go
+18:35
+for for sbe in terms of the integration with transport layer that was a fairly
+18:41
+obvious choice for us because we're using aeron which i'll talk about a bit further on
+18:47
+aeron actually uses sbe under the hood and actually the guys of the are industry experts on java low latency
+18:53
+martin thompson um i recommend watching his stuff he actually co-wrote aeron and he
+19:00
+co-wrote um sbe so he's it's definitely
+19:06
+good that way and he wrote it all open source so like everyone can benefit from it
+19:11
+so what else yes backwards and forward compatibility
+19:16
+this one was a bit more tricky if you look at a product like chronicle wire
+19:22
+that was quite good in that it allows you to encode fields in different orders it allows you to
+19:28
+just skip certain fields if you want which makes it easier to do backwards and forwards compatibility
+19:35
+also if we'd written our own protocol that would have been easier to manage with sp it's a little bit more tricky
+19:40
+due to the flyweight pattern that forces you to encode and decode into fixed fields and
+19:46
+offsets we did need support for variable length
+19:51
+data which you could do with sbe you can define upfront custom length
+19:57
+fields so for example if we want to define an order id that will always be 20 bytes
+20:05
+you can define that up front and then use that as a type going forward
+SP Tool
+20:11
+so sp is fairly easy to use there's a tool called sp tool which you basically include in your pom file runs as part of
+20:17
+the build you define your xml schemas which then off the back of that sbe
+20:24
+builds automatically the encoders and decoders there's an example here of the new order
+20:31
+single encoder and it's fairly straightforward and easy to to reason you can see it's just
+20:37
+putting data into buffer certain fixed offset
+OffHeat Memory
+20:45
+so talked about how the design is going to make it better talked about sbe is a binary protocol which is going to make
+20:51
+it better a bit more on garbage collector-free techniques and also sp
+20:57
+helps us a lot in this regard so off-heat memory um
+21:03
+the more memory you have on the jvm heap necessarily the more time your
+21:09
+garbage collector will spend you know dealing with all the objects in memory and at some point you have that
+21:15
+stop for stop the world event where all threads of your application stop while the gc
+21:21
+goes through the through the heap and all the objects um yes there's a lot as time goes on the g
+21:28
+the garbage collector implementations you can get now are increasingly fast and much better but any gc is still bad
+21:34
+so we try and avoid it as much as possible so using offheat memory refers to
+21:40
+using memory allocated directly to the operative system outside of the jvm
+21:48
+string in turners so string and turning is useful when you have
+21:54
+lots of strings you're having to deal with you can create a map you can put any new string cached into that map
+22:03
+any string that already exists in the map can be immediately thrown away
+22:08
+that's short-lived garbage which is the fastest for the dc to to process
+22:14
+so it's it's quite efficient in that in that way we didn't use the the default
+22:21
+javastring.intern function because that's using java string pools which does have a fixed
+22:26
+amount of memory um so there was a limitation and if you got too big you would still get some dc'ing happening
+22:33
+so we've we've an acceptable use case where we we will have a memory leak because we'll size up front a very large
+22:39
+piece of memory and we'll just keep adding in this case order ids to that to that map
+22:46
+um obviously we need to very carefully size that to the right size but it's it's efficient and it helps us
+22:53
+optimize our processes so interestingly order hierarchy is one
+22:59
+of the things that we have kept on heat versus a lot of the stuff happening off
+23:04
+heap for the civilization good
+Order Hierarchy
+23:10
+um spe highly recommends using so off-heat buffers you can actually allocate them
+23:16
+at the thread level so it's quite efficient um object pooling fairly well known
+23:22
+where you pre-initialize a certain number of objects and put them into a pool um
+23:27
+client come along request one of those objects do operations
+23:32
+put it back in the pool it doesn't get destroyed so it's it's more efficient again um
+23:38
+let's do seeing and where we use that as well we've got a example new order single event which
+23:44
+has an object tool so as we're reading stuff off the um
+23:50
+we can put that into that object to our processing menu
+Time Protocols
+23:57
+so next i want to do talk about time protocols
+24:03
+so for previously we were just relying on network time
+24:09
+protocol ntp um which is defined by the the ntp
+24:14
+servers at national institute of standards and technology nist right there's inevitable latency between our
+24:22
+servers and those servers and the other challenge we found is synchronizing between our own servers so
+24:30
+we were able to get it to kind of round two milliseconds but we're trying to move into a space where we measure things in microseconds and
+24:37
+that's no longer good enough so we're now using precision time protocol
+24:43
+that allows you to go nanosecond even picosecond apparently
+24:48
+and for synchronization what we've noticed is that having moved
+24:53
+to this for our servers that are co-located with with our exchanges we've
+25:00
+gotten down to a 50 nanosecond synchronization which we're happy with so
+25:06
+um and again like the performance constraints of the sequencer that i mentioned we're looking to be kind of handful of microseconds from command to
+25:13
+event so lots of latency requirements the key
+Latency Benchmarking
+25:20
+thing is how do you measure that so we've got a number of ways previously in the past we were already
+25:26
+using lots of writing of you know latency events to influx db using grafana to then show
+25:33
+that um [Music] more recently we're now using something called java micro bench
+25:39
+java micro benchmarks harness which is good for java works the jvm and allows
+25:44
+you to do benchmarking really on a micro scale which is great
+25:50
+we've got two examples here it's kind of test data but it kind of gives you an idea on the left we've got a previous design
+25:57
+you can see a lot of noise and you can see that we're kind of in milliseconds area low milliseconds and on the right this
+26:04
+is some testing for some of the sequencer threads so event in event out
+26:10
+how fast is that and where it's more stable and down to kind of handfuls of microseconds handful microseconds
+26:18
+and uh it's not really a fair comparison because the sequence on the right is not doing as many things and there's still
+26:24
+going to be a bit more business logic to add as we you know continue but
+26:29
+we will still target at the 90th percentile to be under 1 millisecond
+Velocimetrics
+26:38
+um recently bought out by beaks software a year ago this is quite interesting it allows you to monitor
+26:44
+um end-to-end latency in all the network hops so you can see all the wiretaps
+26:49
+here all over so we've got a an order fixed order coming in
+26:55
+this pip we can vlassmetrics or beaks can can read that off the wire
+27:01
+before it goes into our fixing component then do some translating before it sends that out to
+27:07
+uh the command bus again we can measure that so point two points um we can do again the same thing
+27:13
+um off the command bus before it goes into the sequencer and out of the sequencer before port goes to the event
+27:20
+bus so it's really useful to to measure all of those things and to get the wire to wire view so starting from your order
+27:27
+that's coming in from your fixed client all the way to getting to your in this happy accur
+27:32
+mock here but it will be your fix exchange so actually going to market and how long does that take and then equally
+27:39
+when you get a response from the from your fixed exchange what you've had a fill on that order or it's been
+27:45
+cancelled or rejected how long does that take to go back through all of the hops
+27:50
+beaks also gives you something called app tap for application metrics so they
+27:56
+call it ring the bell and it means that you can also at application level see in the fix in here
+28:01
+we've got our chronicle uh fix coming in we need to translate
+28:06
+that to sbe right how long does that take we can then call into the beaks api and
+28:14
+write that latency and see how that looks over time and for multiple orders etc so it's it's really
+28:21
+quite um quite useful quite powerful
+Latency Distribution
+28:26
+uh here's some some the uis are quite good um here's just like a heartbeat latency
+28:32
+distribution you're on the top here we can see that 99.9
+28:37
+99.99 percentile we're something around 12 microseconds for this test here which
+28:43
+is um pretty decent um and below we've got at
+28:49
+the 99.99 percentile um for a sequencer thread that we're testing here
+28:55
+we can see that we're mostly staying under below that 20 microseconds which is a good start but obviously we'll
+Order By Order
+29:04
+the other view you can get is actually order by order so all of the different
+29:10
+events what exactly is the latency that we see on that which is really useful if you want to
+29:15
+look at outliers and then like zoom in on them and why is that
+29:23
+i forgot to say so what's really interesting when you're looking at the the latency
+29:29
+benchmarking is you know what is your your maximum performance like what if
+29:34
+you have a huge message burst of orders during the day what's the maximum you can do before you start seeing some back
+29:39
+pressure or what is the minimum partition size of the disk that
+29:45
+you need to measure up front so that for an expected you know maybe big volume message during the day of orders
+29:52
+you're not going to run out of this size so all of those things are important and also over time if you're doing
+29:58
+a software upgrade a network upgrade performance optimization or you've
+30:05
+written some code which is not performant you need a way to be able to monitor that latency and how it evolves
+30:11
+maybe i don't want to check that code in i want to revert it so you can have a you can actually make a decision actually based on latency and
+30:18
+compare it to previous so again it's really important to be able to measure these things
+Network Accelerator
+30:26
+so now a bit on network accelerators so we're using something called solar
+30:32
+flare and this achieves extreme low latency by a combination of kernel bypass
+30:40
+specially designed hardware and optimized drivers it maintains application compatibility
+30:47
+and support for tcp so you don't need to make any changes to your messages it's very easy to use
+30:55
+so these days our network cards are increasingly sophisticated and can manage a lot more order
+31:02
+throughput what's actually the limiting factor is your linux kernel and how it talks to
+31:07
+your networking stack so what solderflare has is a library called openonload which does this kernel
+Openonload
+31:14
+bypassing and essentially it works around the linux kernel by
+31:21
+implementing all the network stack in user space so you can see here a typical network card and you're receiving queues
+31:28
+openonload will actually define hidden flow steering rules and take some of that data and send it through this other
+31:35
+hidden queue and that user space which will directly talk to the networking
+31:41
+components then afterwards so it's quite quite cool that way it's also quite easy to use um we
+31:48
+be honest haven't done a lot of um changes in terms of how what you get out
+31:53
+of the box you um to kind of define a latency profile that you want
+31:59
+you turn it on you run you say you tell your application to run with it um if the
+32:05
+hardware is turned on it will just run and we found that we were able to shave off a few microseconds off of some of
+32:12
+those key events which was significant for us so it was good
+Aeron
+32:19
+so we've talked about a lot of things design sb binary protocol
+32:24
+how you measure latency talk about solar flare let's end
+32:30
+with with air on now which is our uh really fast message transport layer
+32:35
+that we're using open source library again written by martin thompson um
+32:40
+it's a osi layer 4 designed for high throughput and low latency
+32:46
+it provides reliable flow control transition over udp unit cast and multicast as well as ultra fast
+32:53
+inter-process compute on the same box so i've taken this diagram from martin
+32:59
+thompson's presentation he will explain it far better than i will but some of the key things that i
+33:05
+find interesting so you've got clear separation of concerns between
+33:10
+your client's application of your publisher subscriber stuff the actual media driver that is just
+33:17
+dealing with byte shuffling just moving data around goes over your media media which here is
+33:24
+your for us is our udp multicast um and then you've got the receiver end
+33:30
+um again media driver just dealing with receiving and then your client which actually does
+33:36
+the logic which does the subscribing and and reading off so we aaron uses um dedicated log buffers
+33:44
+so large shared uh sections of memory um and
+33:49
+it's super fast because basically that sender conductor and receiver can be three different threads
+33:55
+um and the if you wonder what that conductor is it's for all the kinds of events that
+34:00
+don't happen very often so you have your new user connection your new uh subscription
+34:06
+um maybe doing some cleanup in the background of of the of the
+34:12
+log buffers that the senders and longer using all of that can happen kind of in the background by the conductor thread
+34:17
+which speaks to the sender puts things on a cube it doesn't need to be super fast and the sender can just then be
+34:23
+dedicated to just moving data lights across the wire
+34:28
+so that's quite um quite interesting also aeron uses
+34:34
+agrono data structures similar to sbe and that allows you to have
+34:41
+key by native types which is which is faster and it avoids the the boxing so
+34:46
+that the allocation of objects is good we're currently live with aeron using it
+Agrona Data Structures
+34:53
+in collocated data centers obviously when you're in the business of electronic trading the closer your your servers are
+34:59
+to the exchange the faster you'll be so we we have a not for everything we have a number of of markets where we have
+35:05
+servers co-located with exchanges and we use air on there um in multicast mode
+35:13
+aaron uses um has a really good handling of back pressure flow and congestion
+35:18
+control um which is consistent with command and event bus architect that we require
+35:23
+basically um our our sequencer is designed to be really fast so we're not too worried about not being able to put
+35:30
+data onto air on fast enough but if if the log buffers start you know filling up and and um
+35:36
+there's an issue with too much pressure aeron is smart enough to tell the um so
+35:42
+you can say i'm i'm now in back pressure mode um that um process can then decide what
+35:48
+to do with that does it slow down stop so wait for later uh which is quite quite useful
+35:54
+so i mentioned that both sp and aeron are using grona data structures
+36:02
+and given we want to deploy aeron also on campus
+36:08
+we will also need to support a multi-destination unicast approach and aaron will allow that so
+36:14
+looking into that um we can't do the the multicast on on campus because we have a
+36:20
+fairly flat network in in places and we don't want to risk have any um udp multicast storms on flooding networks so
+36:29
+important to keep an eye on that so yeah that's kind of a whirlwind tour
+36:34
+through what our previous design was for this order messaging platform
+36:40
+what our new design is the cool technologies out there you can use now in java for for writing
+36:47
+you know super fast applications and um
+36:54
+there's some good links i've put here to some some videos so um one is on air on buy by martin thompson
+37:01
+the other is how how low can you go i mentioned so this is about the whole c plus versus java and and the pros and
+37:09
+cons and his arguing that java is indeed fast enough um
+37:14
+and then there's lots of documentation a lot of this stuff is on on github yes
+37:20
+so any questions for anyone
+37:27
+sure yes
+37:49
+well we have we have multiple sequencers so you know if one becomes unavailable it will immediately it's it's warm and
+37:55
+can and can't pick up um we actually at this really interesting point you touch on
+38:00
+because we're writing to to journal and we're replicating in separate threads
+38:05
+we are actually prioritizing um throughput over recoverability for that very
+38:11
+small amount of events which might not get journaled um so that is that is something that sure it's a kind of a
+38:17
+heated debate and something we'll be continuing to consider and maybe for different use cases
+38:48
+so aeron gives us a lot of that so yes it's multicast so lots of stuff can get lost um but aaron will manage that um
+38:57
+on the receiving end and and give you information give the the processes that are listening information on whether
+39:03
+their the data is there or not um and because it's all done on a separate
+39:08
+thread with the conductor and it's off of the main sender and receiving threads it's it's not slowing anything down
+39:14
+but yeah basically aeron does that for us
+39:28
+yes yes so we're not using um bare metal for everything but we're using bare metal where we need where we have the
+39:34
+the the hot spots for for latency right so the everything that has to do with that
+39:40
+order going to exchange and and back that has to be well we've chosen to be bare metal but for other things that
+39:46
+don't need to be quite so much like um you know doing some pricing of something that come back in a few milliseconds
+39:52
+later that can be done on on jvms or sorry machines absolutely those it's not
+39:59
+only bare metal but for the fast stuff yes
+40:16
+good question i'm not sure which dc we're using um if you want to connect with me um afterwards on linkedin i'll
+40:22
+find out um i've i've sadly not had the opportunity to actually be hands-on development in this so i'm just working
+40:28
+with the developers get to which which is still interesting for me but i i don't know let me answer later
+40:53
+so um i saw a video by martin thompson who said that eron is i think something like 20 times
+41:00
+faster um he was saying it's of course aaron is is far
+41:06
+so it's not you know multiple orders of magnitude but in that video he was saying it was 20 times
+41:23
+yes
+41:34
+yeah yeah well we have yes
+41:45
+yes well there's there's heart rating and there's messages going back and forth to you know to atomic to make sure that
+41:51
+that does happen the important thing is that we keep it off of the main uh threads that are actually
+41:56
+dealing with moving the order through our stack but if you have something more specific
+42:02
+i can try and find out for you
+42:23
+all right thank you everyone it'
