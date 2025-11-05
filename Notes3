@@ -488,3 +488,75 @@ config_attribute	Flexible key/value pairs	Any attribute names
 
 Would you like me to extend this to support configuration versioning (so you can roll back or stage configs per app/session)? It’s a small addition that many trading and gateway systems use.
 
+bsolutely 👍 — here’s a complete SQL example that:
+
+Creates all three tables (app, config_entity, config_attribute)
+
+Inserts sample data for your example (fix-gw-1 with two sessions and their configs)
+
+Uses clear, reproducible IDs.
+
+You can copy-paste and run this directly in psql or pgAdmin.
+
+🧱 Table Definitions
+
+-- 1️⃣ Applications CREATE TABLE app ( app_id SERIAL PRIMARY KEY, app_name TEXT UNIQUE NOT NULL, app_type TEXT NOT NULL, created_at TIMESTAMP DEFAULT now() ); -- 2️⃣ Configurable Entities (App or Session) CREATE TABLE config_entity ( entity_id SERIAL PRIMARY KEY, app_id INT REFERENCES app(app_id), entity_type TEXT NOT NULL, -- 'app' or 'session' entity_name TEXT, -- e.g. 'fix-gw-1' or 'session-ABC-XYZ' parent_entity_id INT REFERENCES config_entity(entity_id), created_at TIMESTAMP DEFAULT now() ); -- 3️⃣ Flexible Attributes CREATE TABLE config_attribute ( entity_id INT REFERENCES config_entity(entity_id), attr_name TEXT NOT NULL, attr_value TEXT, PRIMARY KEY (entity_id, attr_name) );
+💾 Insert Example Data
+
+1️⃣ Application
+
+INSERT INTO app (app_name, app_type) VALUES ('fix-gw-1', 'fix-gateway');
+Let’s assume that creates app_id = 1.
+
+2️⃣ Entities (App + Sessions)
+
+-- App-level entity INSERT INTO config_entity (app_id, entity_type, entity_name, parent_entity_id) VALUES (1, 'app', 'fix-gw-1', NULL); -- entity_id = 1 -- Session entities INSERT INTO config_entity (app_id, entity_type, entity_name, parent_entity_id) VALUES (1, 'session', 'session-ABC-XYZ', 1), -- entity_id = 2 (1, 'session', 'session-DEF-UVW', 1); -- entity_id = 3
+3️⃣ Attributes (Flexible Key–Value Configs)
+
+-- App-level attributes INSERT INTO config_attribute (entity_id, attr_name, attr_value) VALUES (1, 'logLevel', 'debug'), (1, 'threadCount', '2'); -- Session 1: ABC–XYZ INSERT INTO config_attribute (entity_id, attr_name, attr_value) VALUES (2, 'senderCompID', 'ABC'), (2, 'targetCompID', 'XYZ'), (2, 'ip', '1.2.3.4'), (2, 'port', '5000'), (2, 'heartbeat', '30'); -- Session 2: DEF–UVW INSERT INTO config_attribute (entity_id, attr_name, attr_value) VALUES (3, 'senderCompID', 'DEF'), (3, 'targetCompID', 'UVW'), (3, 'ip', '2.2.2.2'), (3, 'port', '6000'), (3, 'heartbeat', '25');
+🔎 Quick Test Queries
+
+Get app-level config:
+
+SELECT * FROM config_attribute WHERE entity_id = 1;
+Get all session configs for fix-gw-1:
+
+SELECT e.entity_name AS session, c.attr_name, c.attr_value FROM config_entity e JOIN config_attribute c ON c.entity_id = e.entity_id WHERE e.parent_entity_id = 1;
+🧩 Optional Additions (if you expand later)
+
+If you later have more gateways (e.g. fix-gw-2), just:
+
+INSERT INTO app (app_name, app_type) VALUES ('fix-gw-2', 'fix-gateway');
+and repeat the same pattern — no schema change needed.
+
+Would you like me to also generate a single SQL script that returns a nested JSON config (for fix-gw-1 → app-level + sessions) so your app can fetch one ready-to-use JSON document per gateway?
+
+You said:
+
+Yes
+ChatGPT said:
+
+Perfect — here’s a single SQL script that:
+✅ Creates tables
+✅ Inserts the sample data (fix-gw-1 + two sessions)
+✅ Returns one nested JSON configuration object per application, combining both app-level and session-level configs
+
+🧱 Full SQL Script
+
+-- =========================================================== -- 1️⃣ TABLE DEFINITIONS -- =========================================================== CREATE TABLE app ( app_id SERIAL PRIMARY KEY, app_name TEXT UNIQUE NOT NULL, app_type TEXT NOT NULL, created_at TIMESTAMP DEFAULT now() ); CREATE TABLE config_entity ( entity_id SERIAL PRIMARY KEY, app_id INT REFERENCES app(app_id), entity_type TEXT NOT NULL, -- 'app' or 'session' entity_name TEXT, -- e.g. 'fix-gw-1' or 'session-ABC-XYZ' parent_entity_id INT REFERENCES config_entity(entity_id), created_at TIMESTAMP DEFAULT now() ); CREATE TABLE config_attribute ( entity_id INT REFERENCES config_entity(entity_id), attr_name TEXT NOT NULL, attr_value TEXT, PRIMARY KEY (entity_id, attr_name) ); -- =========================================================== -- 2️⃣ SAMPLE DATA -- =========================================================== -- Application INSERT INTO app (app_name, app_type) VALUES ('fix-gw-1', 'fix-gateway'); -- App-level entity INSERT INTO config_entity (app_id, entity_type, entity_name, parent_entity_id) VALUES (1, 'app', 'fix-gw-1', NULL); -- Session entities (child of app entity) INSERT INTO config_entity (app_id, entity_type, entity_name, parent_entity_id) VALUES (1, 'session', 'session-ABC-XYZ', 1), (1, 'session', 'session-DEF-UVW', 1); -- App-level attributes INSERT INTO config_attribute (entity_id, attr_name, attr_value) VALUES (1, 'logLevel', 'debug'), (1, 'threadCount', '2'); -- Session 1: ABC–XYZ INSERT INTO config_attribute (entity_id, attr_name, attr_value) VALUES (2, 'senderCompID', 'ABC'), (2, 'targetCompID', 'XYZ'), (2, 'ip', '1.2.3.4'), (2, 'port', '5000'), (2, 'heartbeat', '30'); -- Session 2: DEF–UVW INSERT INTO config_attribute (entity_id, attr_name, attr_value) VALUES (3, 'senderCompID', 'DEF'), (3, 'targetCompID', 'UVW'), (3, 'ip', '2.2.2.2'), (3, 'port', '6000'), (3, 'heartbeat', '25'); -- =========================================================== -- 3️⃣ NESTED JSON CONFIG VIEW / QUERY -- =========================================================== -- This query builds one JSON object per application, -- containing app-level config and all its sessions with configs. SELECT jsonb_build_object( 'app', a.app_name, 'appType', a.app_type, 'appConfig', ( SELECT jsonb_object_agg(ca.attr_name, ca.attr_value) FROM config_entity ce JOIN config_attribute ca ON ce.entity_id = ca.entity_id WHERE ce.app_id = a.app_id AND ce.entity_type = 'app' ), 'sessions', ( SELECT jsonb_agg( jsonb_build_object( 'session', se.entity_name, 'config', jsonb_object_agg(sa.attr_name, sa.attr_value) ) ) FROM config_entity se JOIN config_attribute sa ON sa.entity_id = se.entity_id WHERE se.app_id = a.app_id AND se.entity_type = 'session' GROUP BY se.entity_id ) ) AS app_config FROM app a;
+📦 Example JSON Output
+
+When you run the final query, you’ll get something like:
+
+{ "app": "fix-gw-1", "appType": "fix-gateway", "appConfig": { "logLevel": "debug", "threadCount": "2" }, "sessions": [ { "session": "session-ABC-XYZ", "config": { "senderCompID": "ABC", "targetCompID": "XYZ", "ip": "1.2.3.4", "port": "5000", "heartbeat": "30" } }, { "session": "session-DEF-UVW", "config": { "senderCompID": "DEF", "targetCompID": "UVW", "ip": "2.2.2.2", "port": "6000", "heartbeat": "25" } } ] }
+🧠 Notes
+
+You can add more gateways (fix-gw-2, etc.) — the same query will return one JSON per app.
+
+To fetch just one gateway’s config, add:
+
+WHERE a.app_name = 'fix-gw-1'
+You can wrap the final SELECT in a PostgreSQL view for easy reuse:
+
+CREATE VIEW v_app_config AS <the JSON SELECT query>;
+Would you like me to extend this script to include configuration versioning (so each app/session can have multiple saved config versions or staged releases)? It fits neatly into this schema.
