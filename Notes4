@@ -1,0 +1,192 @@
+Schema (DDL)
+
+-- Application table
+CREATE TABLE app (
+    app_id SERIAL PRIMARY KEY,
+    app_name TEXT UNIQUE NOT NULL,
+    app_type TEXT NOT NULL
+);
+
+-- Configuration version table (global version per app)
+CREATE TABLE config_version (
+    version_id SERIAL PRIMARY KEY,
+    app_id INT REFERENCES app(app_id),
+    version_number INT NOT NULL,
+    description TEXT,
+    created_at TIMESTAMP DEFAULT now(),
+    created_by TEXT,
+    is_active BOOLEAN DEFAULT TRUE
+);
+
+-- Entity table (represents app-level or session-level entities)
+CREATE TABLE config_entity (
+    entity_id SERIAL PRIMARY KEY,
+    version_id INT REFERENCES config_version(version_id),
+    entity_type TEXT NOT NULL,   -- 'app' or 'session'
+    entity_name TEXT NOT NULL,
+    parent_entity_name TEXT,     -- e.g. app name for sessions
+    UNIQUE (version_id, entity_type, entity_name)
+);
+
+-- Attributes (flexible key-value store)
+CREATE TABLE config_attribute (
+    attr_id SERIAL PRIMARY KEY,
+    entity_id INT REFERENCES config_entity(entity_id),
+    attr_name TEXT NOT NULL,
+    attr_value TEXT NOT NULL
+);
+🧩 2️⃣ Sample Data — FIX Gateway Example
+
+-- Application
+INSERT INTO app (app_name, app_type) VALUES ('fix-gw-1', 'fix-gateway');
+
+-- Version 1
+INSERT INTO config_version (app_id, version_number, description, created_by)
+VALUES (1, 1, 'Initial configuration', 'tarun');
+
+-- App-level entity (for fix-gw-1)
+INSERT INTO config_entity (version_id, entity_type, entity_name)
+VALUES (1, 'app', 'fix-gw-1');
+
+-- Attributes for fix-gw-1
+INSERT INTO config_attribute (entity_id, attr_name, attr_value)
+VALUES 
+  (1, 'logLevel', 'debug'),
+  (1, 'threadCount', '2');
+
+-- Session entities
+INSERT INTO config_entity (version_id, entity_type, entity_name, parent_entity_name)
+VALUES
+  (1, 'session', 'session-ABC-XYZ', 'fix-gw-1'),
+  (1, 'session', 'session-DEF-UVW', 'fix-gw-1');
+
+-- Attributes for sessions
+INSERT INTO config_attribute (entity_id, attr_name, attr_value)
+VALUES
+  (2, 'senderCompID', 'ABC'),
+  (2, 'targetCompID', 'XYZ'),
+  (2, 'ip', '1.2.3.4'),
+  (2, 'port', '5000'),
+  (2, 'heartbeat', '30'),
+  (3, 'senderCompID', 'DEF'),
+  (3, 'targetCompID', 'UVW'),
+  (3, 'ip', '2.2.2.2'),
+  (3, 'port', '6000'),
+  (3, 'heartbeat', '25');
+🧠 3️⃣ Query — Get Active (or Specific) Version as JSON
+
+Here’s the clean, non-nested version-safe JSON query:
+
+SELECT jsonb_build_object(
+    'app', a.app_name,
+    'appType', a.app_type,
+    'version', v.version_number,
+    'description', v.description,
+    'appConfig', (
+        SELECT jsonb_object_agg(ca.attr_name, ca.attr_value)
+        FROM config_entity ce
+        JOIN config_attribute ca ON ce.entity_id = ca.entity_id
+        WHERE ce.version_id = v.version_id AND ce.entity_type = 'app'
+    ),
+    'sessions', (
+        SELECT jsonb_agg(session_json)
+        FROM (
+            SELECT jsonb_build_object(
+                'session', se.entity_name,
+                'config', jsonb_object_agg(sa.attr_name, sa.attr_value)
+            ) AS session_json
+            FROM config_entity se
+            JOIN config_attribute sa ON sa.entity_id = se.entity_id
+            WHERE se.version_id = v.version_id AND se.entity_type = 'session'
+            GROUP BY se.entity_id, se.entity_name
+        ) sub
+    )
+) AS app_config
+FROM app a
+JOIN config_version v ON v.app_id = a.app_id
+WHERE a.app_name = 'fix-gw-1'
+  AND v.is_active = TRUE;
+🧾 Example Output
+
+{
+  "app": "fix-gw-1",
+  "appType": "fix-gateway",
+  "version": 1,
+  "description": "Initial configuration",
+  "appConfig": {
+    "logLevel": "debug",
+    "threadCount": "2"
+  },
+  "sessions": [
+    {
+      "session": "session-ABC-XYZ",
+      "config": {
+        "senderCompID": "ABC",
+        "targetCompID": "XYZ",
+        "ip": "1.2.3.4",
+        "port": "5000",
+        "heartbeat": "30"
+      }
+    },
+    {
+      "session": "session-DEF-UVW",
+      "config": {
+        "senderCompID": "DEF",
+        "targetCompID": "UVW",
+        "ip": "2.2.2.2",
+        "port": "6000",
+        "heartbeat": "25"
+      }
+    }
+  ]
+}
+⚙️ 4️⃣ Creating New Versions
+
+To add version 2:
+
+-- 1. Mark old version inactive
+UPDATE config_version
+SET is_active = FALSE
+WHERE app_id = 1 AND is_active = TRUE;
+
+-- 2. Create new version
+INSERT INTO config_version (app_id, version_number, description, created_by)
+SELECT app_id, version_number + 1, 'Add new session', 'tarun'
+FROM config_version
+WHERE app_id = 1
+ORDER BY version_number DESC
+LIMIT 1
+RETURNING version_id;
+
+-- Suppose it returns version_id = 2
+-- 3. Clone app-level and session entities + attributes
+INSERT INTO config_entity (version_id, entity_type, entity_name, parent_entity_name)
+SELECT 2, entity_type, entity_name, parent_entity_name
+FROM config_entity
+WHERE version_id = 1;
+
+INSERT INTO config_attribute (entity_id, attr_name, attr_value)
+SELECT new.entity_id, ca.attr_name, ca.attr_value
+FROM config_attribute ca
+JOIN config_entity old ON old.entity_id = ca.entity_id
+JOIN config_entity new ON new.entity_name = old.entity_name
+  AND new.entity_type = old.entity_type
+  AND new.version_id = 2
+WHERE old.version_id = 1;
+
+-- 4. Modify version 2 as needed
+UPDATE config_attribute
+SET attr_value = 'info'
+WHERE entity_id IN (
+    SELECT entity_id FROM config_entity WHERE version_id = 2 AND entity_type = 'app'
+) AND attr_name = 'logLevel';
+Now version 2 exists, version 1 is archived.
+
+✅ Summary
+
+Layer	Purpose
+app	Identifies each system (e.g. fix-gw-1)
+config_version	Tracks version history per app
+config_entity	Represents app or session nodes
+config_attribute	Stores arbitrary key–value pairs
+Query	Exports config JSON for deployment or runtime loading
