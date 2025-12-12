@@ -1,0 +1,37 @@
+public class ThreadSafeWrapper<Key,Value> {
+    private final int size = 1000;
+    private final Object[] locks = new Object[size];
+
+    {
+        for (int i = 0; i < size; i++) {
+            locks[i] = new ReentrantLock();
+        }
+    }
+
+    public interface UnsafeHandler<K, V> {
+        void handle(K key, V value);
+    }
+    private final UnsafeHandler<Key,Value> handler;
+
+    public ThreadSafeWrapper(UnsafeHandler<Key, Value> handler) {
+        this.handler = handler;
+    }
+
+    /*
+     * This function will be called by multiple threads at a high
+     * frequency. The UnsafeHandler is fast but is not thread safe within
+     * the same key.
+     * Write an implementation that will add thread safety
+     */
+    public void processEvent(Key key, Value value) {
+        Object lock = getLock(key);
+        synchronized (lock) {
+            handler.handle(key, value);
+        }
+    }
+
+    private Object getLock(Key key) {
+        return locks[key.hashCode() % size];
+    }
+}
+
